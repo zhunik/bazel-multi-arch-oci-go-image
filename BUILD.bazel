@@ -1,0 +1,98 @@
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_oci//oci:defs.bzl", "oci_image_index", "oci_image", "oci_tarball")
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
+
+go_library(
+    name = "app_lib",
+    srcs = ["main.go"],
+    importpath = "example.com/custom_registry/app",
+    visibility = ["//visibility:private"],
+    deps = ["@com_github_google_go_cmp//cmp"],
+)
+
+go_binary(
+    name = "app",
+    embed = [":app_lib"],
+    goarch = "amd64",
+    goos = "linux",
+    visibility = ["//visibility:public"],
+)
+
+go_binary(
+    name = "app_arm",
+    embed = [":app_lib"],
+    goarch = "arm64",
+    goos = "linux",
+    visibility = ["//visibility:public"],
+)
+
+# Put app go_binary into a tar layer.
+pkg_tar(
+    name = "app_layer",
+    srcs = [":app"],
+    # If the binary depends on RUNFILES, uncomment the attribute below.
+    # include_runfiles = True
+)
+
+pkg_tar(
+    name = "app_arm_layer",
+    srcs = [":app_arm"],
+    # If the binary depends on RUNFILES, uncomment the attribute below.
+    # include_runfiles = True
+)
+
+oci_image(
+    name = "image_amd64",
+    base = "@distroless_base_amd_64",
+    cmd = ["/app"],
+    tars = [":app_layer"],
+)
+
+oci_image(
+    name = "image_arm64",
+    base = "@distroless_base_arm_64",
+    cmd = ["/app_arm"],
+    tars = [":app_arm_layer"],
+)
+
+oci_image_index(
+    name = "multi_image",
+    images = [
+        ":image_amd64",
+        ":image_arm64",
+    ],
+)
+
+# This is the target that should be released to the target platform
+# platform_transition_filegroup(
+#     name = "transitioned_image",
+#     srcs = [":image_amd64"],
+#     target_platform = select({
+#         "@platforms//cpu:arm64": "@rules_go//go/toolchain:linux_arm64",
+#         "@platforms//cpu:x86_64": "@rules_go//go/toolchain:linux_amd64",
+#     }),
+# )
+
+# $ bazel build :tarball
+# $ docker load --input $(bazel cquery --output=files :tarball)
+# $ docker run --rm gcr.io/example:latest
+#   string(
+# -       "Hello World",
+# +       "Hello Go",
+#   )
+oci_tarball(
+    name = "tarball",
+    format = "oci",
+    # Use the image built for the exec platform rather than the target platform
+    image = ":multi_image",
+    repo_tags = ["gcr.io/example:latest"],
+)
+
+# container_structure_test(
+#     name = "test",
+#     configs = ["test.yaml"],
+#     # Use the image built for the exec platform rather than the target platform
+#     image = ":image_amd64",
+# )
